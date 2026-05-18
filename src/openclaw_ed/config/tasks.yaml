@@ -1,0 +1,90 @@
+triage_task:
+  description: >
+    Given this ED snapshot, return up to 3 highest-risk bedded patients.
+
+    ed_state (JSON):
+    {ed_state}
+
+    Output ONLY a JSON array. Each element MUST include:
+      bed, name, reason, suggestion, role, severity
+
+    Use ESI level as the base for severity (ESI 1=95, 2=80, 3=55, 4=30, 5=15).
+    Add penalties: +20 unread critical result, +10 unread abnormal result,
+    +10 SpO2<92, +10 SBP<90. Cap at 100.
+  expected_output: >
+    A JSON array of up to 3 items with the fields described above.
+  agent: triage_risk_scorer
+
+sepsis_task:
+  description: >
+    From this ED snapshot, find every patient with SIRS>=2 OR septic_trajectory=true
+    OR a Lactate order with abnormal=true. For each, anchor the bundle clock at the
+    earliest of (arrival_time, first Lactate placed_at). Report elapsed_min and
+    remaining_min to the 180-min (3h) target. Identify missing bundle elements:
+    "Lactate", "Lactate result", "Blood cultures" (look for orders named Lactate
+    and Blood Culture).
+
+    ed_state (JSON):
+    {ed_state}
+
+    Output ONLY a JSON array. Each element MUST include:
+      bed, name, reason, suggestion, role, severity, elapsed_min, remaining_min
+  expected_output: >
+    A JSON array of sepsis items.
+  agent: sepsis_bundle_watcher
+
+results_task:
+  description: >
+    From this ED snapshot, find all orders that meet ANY of:
+      - resulted_at is set, read_at is null, and age >= 30 minutes
+      - critical=true and read_at is null (any age)
+
+    ed_state (JSON):
+    {ed_state}
+
+    Return up to 6, ranked by severity. Each item MUST include:
+      bed, name, reason, suggestion, role, severity, age_min, order
+  expected_output: >
+    A JSON array of up to 6 unread-result items.
+  agent: results_tracker
+
+discharge_task:
+  description: >
+    From this ED snapshot, find ESI 4-5 patients with LOS > 60 min who are
+    discharge candidates. For each, compute ETA: 15 min if discharge_ready=true
+    and no blockers; 30 min if results all back; 60 min otherwise. Enumerate
+    blockers: "results pending" (any orders without resulted_at), "results unread"
+    (resulted_at set, read_at null), "MD eval needed" (discharge_ready=false).
+
+    ed_state (JSON):
+    {ed_state}
+
+    Return up to 5. Each item MUST include:
+      bed, name, reason, suggestion, role, severity, eta_min, ready
+  expected_output: >
+    A JSON array of up to 5 discharge items.
+  agent: discharge_optimizer
+
+coordinator_task:
+  description: >
+    You will receive the outputs of triage_task, sepsis_task, results_task,
+    and discharge_task in your context. Merge them into a single pool, dedupe by
+    bed (keep the highest-severity item per bed across ALL agents), sort by
+    severity descending, and take the top 3 as the "coordinator" list. Add a
+    "from" field on each coordinator item naming the source agent.
+
+    Return a SINGLE JSON object (NOT an array) with EXACTLY five keys:
+      triage, sepsis, results, discharge, coordinator
+
+    The first four values are the JSON arrays from the four specialist tasks
+    (verbatim). The fifth is your deduped top-3 list.
+
+    Wrap the final answer in a JSON code block. No prose outside the JSON.
+  expected_output: >
+    A single JSON object with keys triage, sepsis, results, discharge, coordinator.
+  agent: charge_coordinator
+  context:
+    - triage_task
+    - sepsis_task
+    - results_task
+    - discharge_task
